@@ -2,10 +2,10 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
 module EventRecords where
-import Data.Time 
+import Data.Time
 -- import qualified Data.Time.Format as DTF
 import qualified Data.ByteString.Lazy as BL
-import Data.Csv hiding (decode, decodeByName) 
+import Data.Csv hiding (decode, decodeByName)
 import Data.Csv.Streaming
 import qualified Data.Vector as V
 import Control.Applicative
@@ -21,9 +21,8 @@ data Event = Event
      ,timestamp :: UTCTime
     } deriving Show
 
-
 instance FromNamedRecord Event where
-    parseNamedRecord r = Event <$> r .: "person" <*> r .: "meat-bar-type"  <*> r .: "date"  
+    parseNamedRecord r = Event <$> r .: "person" <*> r .: "meat-bar-type"  <*> r .: "date"
 
 instance FromField UTCTime where
    parseField s = do
@@ -31,6 +30,12 @@ instance FromField UTCTime where
      case parseTimeM True  defaultTimeLocale "%FT%T%QZ" f of
        Nothing -> fail "Unable to parse UTC time"
        Just g  -> return g
+
+runs :: [Int] -> [Int]
+runs xs = [head xs] ++ ( foldl (++) [] $ map isRun  $ zip xs (tail xs))
+    where
+     isRun (a, b) = if (b > a) then [b] else []
+
 
 getDefaultCSV = getStuff "data.csv"
 

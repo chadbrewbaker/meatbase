@@ -5,7 +5,7 @@ import           Test.Hspec
 import           Test.Hspec.Wai
 import           Test.Hspec.Wai.JSON
 import           Data.Aeson (Value(..), object, (.=))
-
+import           Data.Time
 import           Example (app)
 import           Model
 import Test.Hspec.Expectations ()
@@ -28,7 +28,20 @@ import qualified Data.Text as Text
 
 
 main :: IO ()
-main = hspec spec
+main = hspec $ do
+     describe "Prelude.head" $ do
+        it "returns the first element of a list" $ do
+           head [23 ..] `shouldBe` (23 :: Int) 
+
+     describe "Given I ask for the year" $ do
+       it "Then I get 2016" $ do
+          now <- getCurrentTime
+          let today = utctDay now
+          let (year, month, day) = toGregorian today
+          (fromInteger year) `shouldBe` (2016 :: Int)
+
+
+     spec
 
 -- readTodos :: IO [Sqlite.Entity Person]
 -- readTodos =  runDb $ Sqlite.selectList [] []
@@ -60,16 +73,11 @@ spec = with app $ do
     it "responds with 200 and people list" $ do
       get "/streaks" `shouldRespondWith` "[]" {matchStatus = 200}
 
-  describe "GET /freqday/:month" $ do
+  describe "GET /freqday" $ do
     it "responds with 200 and largest day" $ do
-      get "/freqday/1" `shouldRespondWith` "1" {matchStatus = 200}
+      get "/freqday" `shouldRespondWith` "1" {matchStatus = 200}
 
-  describe "POST /upload" $ do
-    it "responds with 200 and largest day" $ do
-      get "/freqday/1" `shouldRespondWith` "1" {matchStatus = 200}
 
-  describe "BORK" $ do
+  describe "read in data from csv" $ do
      it "does stuff" $ do
-       get "/addmike" `shouldRespondWith` "1" {matchStatus = 404}
-  
-
+       get "/default" `shouldRespondWith` "1" {matchStatus = 404}

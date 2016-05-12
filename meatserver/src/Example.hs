@@ -10,13 +10,13 @@
 {-# LANGUAGE FlexibleContexts #-}
 
 
-module Example (runApp, app) where
+module Example (runApp,  app) where
 import EventRecords
-import           Data.Aeson (Value(..), object, (.=))
-import           Network.Wai (Application)
+import Data.Aeson (Value(..), object, (.=))
+import Network.Wai (Application)
 import Network.Wai.Middleware.RequestLogger
 import Network.Wai.Parse
-import Data.Text as T hiding(map)
+import qualified Data.Text as T
 import Database.Persist
 import qualified Database.Persist.Sqlite as Sqlite
 
@@ -25,14 +25,22 @@ import qualified Data.ByteString.Char8 as BS
 import qualified Web.Scotty as S
 import qualified Data.Time.Format as DTF
 import Data.Time
-import Database.Persist.Sql 
-import qualified Database.Sqlite  as S 
+import Database.Persist.Sql
+import qualified Database.Sqlite  as S
 import Model
 import Control.Monad.IO.Class
 import Control.Monad.Logger -- (runNoLoggingT)
 
 
 import Control.Monad.Trans.Resource (runResourceT, ResourceT)
+import qualified Data.List as L
+import qualified Data.MultiSet as MS
+import qualified Data.MultiMap as MM -- hiding (map)
+import Data.Pool (Pool)
+-- myGlobalPool :: IORef ConnectionPool
+-- {-# NOINLINE myGlobalVar #-}
+-- myGlobalPool = unsafePerformIO (newIORef 17)
+
 
 parseTimestamp :: String -> UTCTime
 parseTimestamp t = DTF.parseTimeOrError False defaultTimeLocale "%FT%T%QZ" t
@@ -48,19 +56,53 @@ streaks = undefined
 
 consumption = undefined
 
-freqDay ::  [Entity MeatEvent] -> Int -> Int
-freqDay = undefined
+toYearMonthDay :: UTCTime -> (Int, Int, Int) -- (Year, Month, Day)
+toYearMonthDay utime = toInts $ toTrip utime
+                   where
+                   toTrip t = toGregorian (utctDay t)
+                   toInts (y,m,d) = (fromInteger y, m, d)
 
-app' :: S.ScottyM ()
+-- maxRep x = L.last $ L.sort $ countRep x
+-- countRep s =  map (\x->(length x, [head x])) . L.group . L.sort s
+
+-- [timestamp] -> [(year,month, mostFreqDay)]
+freqDays :: [(UTCTime)] -> [((Int, Int), Int)]
+freqDays xs =  map (\x -> (fst x, snd $ L.last $ L.sort $ snd x)) $ monthListTups xs
+         where
+         countingTup ys = MS.toOccurList .  MS.fromList $ map toYearMonthDay ys
+         toMMTup ((y,m,d),count) = ((y,m), (count,d))
+         monthTups x = map toMMTup $  countingTup x
+         monthListTups x = MM.assocs$MM.fromList $ monthTups x
+        -- toFreq ys  =   map( (fst, last.sort.snd) ) ys
+       --  freqDay (a, ys) = (a, snd$last $ sort ys)
+
+
+freqDay ::  [Entity MeatEvent] -> [(Int, Int, Int)]
+freqDay = undefined
+--freqDay = freqDays $ getTimestamps
+-- grab the stream of meat events
+-- yank out the timestamp to a list
+--
+
+
+-- app' :: Connection ->  S.ScottyM ()
+
+--app conn = do
 app' = do
- -- S.middleware logStdoutDev
+  S.middleware logStdoutDev
   S.get "/" $ S.text "hello"
-  S.get "/people" $ S.text "[]"
+  S.get "/default" $ do
+        now <- liftIO getDefaultCSV
+        S.json$ map show $ now
+  S.get "/people" $ do
+         people <- liftIO $ readPeople
+         S.json $ people
+
   S.get "/streaks" $ S.text "[]"
   S.get "/consumption" $ S.text "[]"
-  S.get "/freqday/:month" $ do
-        month <- S.param "month"
-        S.text $ month
+  S.get "/freqday" $ do
+        events <- liftIO $ readMeatEvents
+        S.json $ events
 
   S.get "/some-json" $ do
     S.json $ object ["foo" .= Number 23, "bar" .= Number 42]
@@ -72,16 +114,20 @@ app' = do
     -- let fs' = [ (fieldName, BS.unpack (fileName fi), fileContent fi) | (fieldName,fi) <- fs ]
     S.text $ "I got a file"
   S.get "/addmike" $ do
+      mid <- liftIO $ runDb $ insertPerson "Mikey"
      -- let mic26 = Person "Michael"
-     -- micK <- liftIO $ runDb $ insert mic26
+     --  mid <- liftIO $ runDb $ insert mic26
+      let jerky = MeatType "DeerJerky"
+      djid <- liftIO $ runDb $ insert jerky
+      now <- liftIO $ getCurrentTime
+      foo <- liftIO $ runDb $ insert (MeatEvent mid djid now)
       results <- liftIO $ readPeople
-   
+
       S.json $ map entityIdToJSON $ results
       -- S.text $ readPeople $ results
 
 -- readPerson :: IO [Sqlite.Entity Person]
 -- readPerson =   runDb $ Sqlite.selectList [] []
-
 
 app :: IO Application
 app = S.scottyApp app'
@@ -105,9 +151,9 @@ app = S.scottyApp app'
 
 
 -- runDb :: SqlPersist (ResourceT (NoLoggingT IO)) a -> IO a
--- runDb = runNoLoggingT 
---       . runResourceT 
---       . Sqlite.withSqliteConn ":memory:" 
+-- runDb = runNoLoggingT
+--       . runResourceT
+--       . Sqlite.withSqliteConn ":memory:"
 --       . runSqlConn
 
 main :: IO ()
@@ -117,67 +163,52 @@ main = runApp
 -- create our initial pool, and each time we need to perform an action we check
 -- out a single connection from the pool.
 data PersistPool = PersistPool ConnectionPool
+openConnectionCount :: Int
+openConnectionCount = 1
+
+
+
 
 runApp :: IO ()
 runApp = do
 
-    -- Sqlite.runSqlite ":memory:" $ Sqlite.runMigration migrateAll
-    --Sqlite.withSqlitePool ":memory:" 10 $ \pool ->
-    --S.runNoLoggingT $ 
-    --
-    --Sqlite.withSqliteConn ":memory:" $ \conn -> 
+    -- runDb $ do
+    --   printMigration migrateAll
+    --   liftIO $ S.scotty 8080 app'
 
-    -- conn <- open' (T.pack ":memory:")
-    -- runSqliteConn conn $ do
+       runStderrLoggingT $ Sqlite.withSqlitePool "meat.db" 10 $ \pool -> liftIO $ do
+          runDB pool $ liftIO $ do
+            mkMeatDB pool
+            S.scotty 8080 $ do
 
-    --Sqlite.runSqlite ":memory:" $ Sqlite.runMigration migrateAll $ \conn ->
-      -- Sqlite.runMigration migrateAll
-      --runDb $ runMigration migrateAll
-     
-  -- liftIO $ Db.runSqlite "example.db" insertInitialData
-     runDb $ do
-       printMigration migrateAll
-       liftIO $ S.scotty 8080 app'
+              S.middleware logStdoutDev
+              S.get "/" $ S.text "hello"
+              S.get "/default" $ do
+                    now <- liftIO getDefaultCSV
+                    S.json$ map show $ now
+              S.get "/people" $ do
+                  ps <- liftIO (getPerson pool)
+                  S.json ps
+              S.get "/meattypes" $ do
+                      xs <- liftIO (getMeatType pool)
+                      S.json xs
+              S.get "/meatevents" $ do
+                      xs <- liftIO (getMeatEvent pool)
+                      S.json xs
+              S.get "/loadevents" $ do
+                        xs <- liftIO getDefaultCSV
+                        liftIO $ runDB pool $ mapM_ insertMeatEvent xs
+                      --  liftIO $ mapM_ ( insertMeatEvent' pool ) xs
 
+                        -- doInsertMeatEvent
+                          --where
+                            --doInsertMeatEvent e = liftIO $ insertMeatEvent (name e) (meat e) (timestamp e)
+                        ys <- liftIO (getMeatEvent pool)
+                        S.json ys
 
-     -- Sqlite.runSqlite "meat.db" $ do
-     --    runMigration migrateAll
-     --    liftIO $ S.scotty 8080 app'
-
-    -- Sqlite.runSqlite ":memory:" $ runMigration migrateAll
-   --  Sqlite.withSqlitePool ":memory:" 1 $ \pool ->
-        
-
-
-      ----runNoLoggingT $ Sqlite.withSqliteConn ":memory:" $ \conn -> do
-      ----   runSqlConn (runMigration migrateAll) conn
-        --  liftIO $ S.scotty 8080 app'   
-
-
-       --Sqlite.runSqlite ":memory:" 
-      -- S.scotty 8080 app'
-    -- close' conn
---   memdb = ":memory:" 
--- filedb = "sqlite3.db"
--- main :: IO ()
-     --Sqlite.runSqlite ":memory:" $ do
-      --    Sqlite.runMigration migrateAll
-
-
-
--- open' :: T.Text -> IO SqlBackend
--- open' t = S.open t >>= flip Sqlite.wrapConnection (\_ _ _ _ -> return ()) -- no logging
-
--- runSqliteConn :: SqlBackend -> SqlPersistM a -> IO a
--- runSqliteConn = flip runSqlPersistM
-
---------------------------------------------------------------------------------
--- Example
-
--- main :: IO ()
--- main = do
---     conn <- open' (T.pack ":memory:")
---     runSqliteConn conn $ do
---         return () -- logic
---     close' conn
-     
+              -- middleware logStdout
+              -- middleware $ gzip $ def { gzipFiles = GzipCompress }
+              -- middleware $ staticPolicy (noDots >-> addBase "Static")
+              -- home
+              -- movies pool
+              -- login
