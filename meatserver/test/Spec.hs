@@ -1,83 +1,47 @@
-{-# LANGUAGE OverloadedStrings, QuasiQuotes #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Main (main) where
 
-import           Test.Hspec
-import           Test.Hspec.Wai
-import           Test.Hspec.Wai.JSON
-import           Data.Aeson (Value(..), object, (.=))
-import           Data.Time
-import           Example (app)
-import           Model
+import MeatApp
+import Model
+import EventRecords
+import Test.Hspec
+import Test.Hspec.Wai
+import qualified  Web.Scotty as S
+import Data.Aeson (encode)
 import Test.Hspec.Expectations ()
-import Database.Persist hiding(get)
 import qualified Database.Persist.Sqlite as Sqlite
-import qualified Data.Text as Text
-
-
---import Application           (makeFoundation, makeLogWare)
---import ClassyPrelude         as X
---import Database.Persist      hiding (get)
---import Database.Persist.Sql  (SqlPersistM, SqlBackend, runSqlPersistMPool, rawExecute, rawSql, unSingle, connEscapeName)
---import Foundation            as X
---import Model                 as X
---import Test.Hspec            as X
---import Text.Shakespeare.Text (st)
---import Yesod.Default.Config2 (ignoreEnv, loadAppSettings)
---import Yesod.Test            as X
-
-
+import Control.Monad.Logger
 
 main :: IO ()
-main = hspec $ do
-     describe "Prelude.head" $ do
-        it "returns the first element of a list" $ do
-           head [23 ..] `shouldBe` (23 :: Int) 
+main = runNoLoggingT $ Sqlite.withSqlitePool "meat.db" 10 $ \pool -> liftIO $ do
+   let testApp = allRoutes pool
+   hspec $ with (S.scottyApp testApp)  $ do
 
-     describe "Given I ask for the year" $ do
-       it "Then I get 2016" $ do
-          now <- getCurrentTime
-          let today = utctDay now
-          let (year, month, day) = toGregorian today
-          (fromInteger year) `shouldBe` (2016 :: Int)
+     describe "Given I clean the DB" $
+                it "Then it is empty" $ do
+                       _ <- liftIO (cleanDB pool)
+                       get "/people" `shouldRespondWith` "[]" {matchStatus = 200}
 
+     describe "Given I load the default CSV" $
+           it "Then I dont get an error" $
+              get "/loadevents" `shouldRespondWith` "25" {matchStatus = 200}
 
-     spec
+     describe "Given I ask for people after loading CSV" $
+            it "Then I get Ashton, Bob, and Chuck" $
+               get "/people" `shouldRespondWith`
+                 "[{\"name\":\"ashton\",\"id\":1},{\"name\":\"bob\",\"id\":2},{\"name\":\"chuck\",\"id\":3}]"
+                     {matchStatus = 200}
 
--- readTodos :: IO [Sqlite.Entity Person]
--- readTodos =  runDb $ Sqlite.selectList [] []
+     describe "Given I ask for streaks" $
+            it "Then I dont get an error" $
+              get "/streaks" `shouldRespondWith` 200
 
-spec :: Spec
-spec = with app $ do
-  describe "GET /" $ do
-    it "responds with 200" $ do
-      get "/" `shouldRespondWith` 200
+     describe "Given I ask for freqs" $
+            it "Then I dont get an error" $
+                get   "/freqday" `shouldRespondWith`
+                 "[[[2015,1],7],[[2015,2],1],[[2015,3],1],[[2015,4],1],[[2015,5],1],[[2015,8],1]]" {matchStatus = 200}
 
-    it "responds with 'hello'" $ do
-      get "/" `shouldRespondWith` "hello"
-
-    it "responds with 200 / 'hello'" $ do
-      get "/" `shouldRespondWith` "hello" {matchStatus = 200}
-
-    it "has 'Content-Type: text/plain; charset=utf-8'" $ do
-      get "/" `shouldRespondWith` 200 {matchHeaders = ["Content-Type" <:> "text/plain; charset=utf-8"]}
-
-  -- describe "GET /some-json" $ do
-  --   it "responds with some JSON" $ do
-  --     get "/some-json" `shouldRespondWith` [json|{foo: 23, bar: 42}|]
-
-  describe "GET /people" $ do
-    it "responds with 200 and people list" $ do
-      get "/people" `shouldRespondWith` "[]" {matchStatus = 200}
-
-  describe "GET /streaks" $ do
-    it "responds with 200 and people list" $ do
-      get "/streaks" `shouldRespondWith` "[]" {matchStatus = 200}
-
-  describe "GET /freqday" $ do
-    it "responds with 200 and largest day" $ do
-      get "/freqday" `shouldRespondWith` "1" {matchStatus = 200}
-
-
-  describe "read in data from csv" $ do
-     it "does stuff" $ do
-       get "/default" `shouldRespondWith` "1" {matchStatus = 404}
+     describe "Given I ask for upload" $
+            it "Then I now have 26 events" $   do
+                let jenny = Event { name = "Elmer", meat = "rabbit", timestamp = Model.parseTimestamp "2014-11-02T05:15:25.123Z" }
+                post "/upload" ( encode  jenny) `shouldRespondWith` "26" {matchStatus = 200}
